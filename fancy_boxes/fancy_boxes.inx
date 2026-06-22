@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+  <name>Fancy Boxes</name>
+  <id>org.miklakt.fancy_boxes</id>
+  <param name="mode" type="notebook">
+    <page name="exact_g2" gui-text="Exact G2">
+      <label appearance="header">Box size</label>
+      <param name="exact_width" type="float" min="0.001" max="100000" precision="3" gui-text="Width">200</param>
+      <param name="exact_height" type="float" min="0.001" max="100000" precision="3" gui-text="Height">100</param>
+      <param name="exact_corner" type="float" min="0" max="100000" precision="3" gui-text="Corner extent">20</param>
+      <param name="exact_unit" type="optiongroup" appearance="combo" gui-text="Units">
+        <option value="px">px</option>
+        <option value="mm">mm</option>
+        <option value="cm">cm</option>
+        <option value="in">in</option>
+        <option value="pt">pt</option>
+      </param>
+      <param name="exact_label" type="string" gui-text="Object label">Fancy box</param>
+    </page>
+    <page name="custom" gui-text="Custom">
+      <label appearance="header">Box size</label>
+      <param name="custom_width" type="float" min="0.001" max="100000" precision="3" gui-text="Width">200</param>
+      <param name="custom_height" type="float" min="0.001" max="100000" precision="3" gui-text="Height">100</param>
+      <param name="custom_corner" type="float" min="0" max="100000" precision="3" gui-text="Corner extent">20</param>
+      <param name="custom_unit" type="optiongroup" appearance="combo" gui-text="Units">
+        <option value="px">px</option>
+        <option value="mm">mm</option>
+        <option value="cm">cm</option>
+        <option value="in">in</option>
+        <option value="pt">pt</option>
+      </param>
+      <param name="custom_label" type="string" gui-text="Object label">Fancy box</param>
+      <separator />
+      <label appearance="header">Approximation</label>
+      <param name="segments" type="int" min="0" max="32" gui-text="Cubic segments per corner; 0 = auto">0</param>
+      <param name="max_angle" type="float" min="5" max="90" precision="1" gui-text="Auto mode: max tangent turn per cubic, degrees">18</param>
+      <separator />
+      <param name="profile" type="notebook">
+        <page name="sin_p" gui-text="sin^p">
+          <param name="sin_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses sin^p; p=1 gives the former profiled G2 curve, p=2 gives the former sine-squared profile.">2</param>
+        </page>
+        <page name="smooth_step" gui-text="smooth_step">
+          <param name="smooth_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses t^p(1 - t)^p.">2</param>
+        </page>
+      </param>
+    </page>
+  </param>
+  <effect>
+    <object-type>all</object-type>
+    <effects-menu>
+      <submenu name="Render" />
+    </effects-menu>
+  </effect>
+  <script>
+    <command location="inx" interpreter="python">fancy_boxes.py</command>
+  </script>
+</inkscape-extension>
