@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: ./install.sh [EXTENSIONS_DIR]
 
-Installs Fancy Boxes into the conventional per-user Inkscape extensions folder.
+Installs Fancy Boxes into a tidy fancy_boxes subfolder inside the per-user Inkscape extensions folder.
 
 Destination selection:
   1. First command-line argument, if provided
@@ -41,15 +41,20 @@ else
   extensions_dir="${XDG_CONFIG_HOME:-$HOME/.config}/inkscape/extensions"
 fi
 
-mkdir -p "$extensions_dir"
+target_dir="$extensions_dir/fancy_boxes"
+mkdir -p "$target_dir"
+
+# Remove legacy flat installs made by older versions of this installer.
+rm -f "$extensions_dir/fancy_boxes.inx" "$extensions_dir/fancy_boxes.py"
+
 for inx_file in "$source_dir"/*.inx; do
-  install -m 0644 "$inx_file" "$extensions_dir/$(basename -- "$inx_file")"
+  install -m 0644 "$inx_file" "$target_dir/$(basename -- "$inx_file")"
 done
-install -m 0755 "$source_dir/fancy_boxes.py" "$extensions_dir/fancy_boxes.py"
+install -m 0755 "$source_dir/fancy_boxes.py" "$target_dir/fancy_boxes.py"
 
 cat <<EOF
 Installed Fancy Boxes to:
-  $extensions_dir
+  $target_dir
 
 Restart Inkscape, then open:
   Extensions > Render > Fancy Boxes
