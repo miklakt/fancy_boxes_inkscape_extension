@@ -181,17 +181,82 @@ class ProfileCorner:
 class ElasticaCorner:
     # Free-length Euler elastica for a symmetric clamped 90-degree corner.
 
-    def __init__(self, extent, segments=4, samples=4096, max_node_distance=0.0):
+    def __init__(self, extent, segments=4, samples=4096, max_node_distance=0.0, target_length=0.0):
         self.extent = float(extent)
         self.segments = max(1, int(segments))
         self.samples = max(512, int(samples))
         self.max_node_distance = max(0.0, float(max_node_distance))
+        self.target_length = max(0.0, float(target_length))
         self.theta_total = math.pi / 2.0
+        self.sliding_length_ratio = self._sliding_length_ratio()
+        if self.target_length <= 0.0 or self.target_length >= self.sliding_length_ratio * self.extent - 1e-9:
+            self.mu = None
+        else:
+            self.mu = self._solve_mu_for_length()
         self._build_tables()
 
+    def _inv_curvature_weight(self, theta):
+        q = math.cos(theta) + math.sin(theta)
+        if self.mu is None:
+            return 1.0 / math.sqrt(q)
+        return 1.0 / math.sqrt(max(1e-15, 1.0 + self.mu * q))
+
+    @classmethod
+    def _sliding_length_ratio(cls):
+        n = 4096
+        theta_total = math.pi / 2.0
+        h = theta_total / n
+        x = 0.0
+        s = 0.0
+        for i in range(n):
+            a0 = i * h
+            a1 = (i + 1) * h
+            w0 = 1.0 / math.sqrt(math.cos(a0) + math.sin(a0))
+            w1 = 1.0 / math.sqrt(math.cos(a1) + math.sin(a1))
+            x += 0.5 * (math.cos(a0) * w0 + math.cos(a1) * w1) * h
+            s += 0.5 * (w0 + w1) * h
+        return s / x
+
+    @classmethod
+    def length_bounds(cls, extent):
+        return 1.5 * extent, cls._sliding_length_ratio() * extent
+
     @staticmethod
-    def _inv_curvature_weight(theta):
-        return 1.0 / math.sqrt(math.cos(theta) + math.sin(theta))
+    def _ratio_for_mu(mu, n=1024):
+        theta_total = math.pi / 2.0
+        h = theta_total / n
+        x = 0.0
+        s = 0.0
+        for i in range(n):
+            a0 = i * h
+            a1 = (i + 1) * h
+            q0 = math.cos(a0) + math.sin(a0)
+            q1 = math.cos(a1) + math.sin(a1)
+            w0 = 1.0 / math.sqrt(max(1e-15, 1.0 + mu * q0))
+            w1 = 1.0 / math.sqrt(max(1e-15, 1.0 + mu * q1))
+            x += 0.5 * (math.cos(a0) * w0 + math.cos(a1) * w1) * h
+            s += 0.5 * (w0 + w1) * h
+        return s / x
+
+    def _solve_mu_for_length(self):
+        min_len, max_len = self.length_bounds(self.extent)
+        target = clamp(self.target_length, min_len, max_len) / self.extent
+        circle_ratio = math.pi / 2.0
+        if target <= circle_ratio:
+            lo = -1.0 / math.sqrt(2.0) + 1e-9
+            hi = 0.0
+        else:
+            lo = 0.0
+            hi = 1.0
+            while self._ratio_for_mu(hi) < target and hi < 1e9:
+                hi *= 2.0
+        for _ in range(64):
+            mid = 0.5 * (lo + hi)
+            if self._ratio_for_mu(mid) < target:
+                lo = mid
+            else:
+                hi = mid
+        return 0.5 * (lo + hi)
 
     def _build_tables(self):
         n = self.samples
@@ -298,6 +363,8 @@ class FancyBoxes(inkex.EffectExtension):
         pars.add_argument("--power", type=float, default=2.0)
         pars.add_argument("--sin_power", type=float, default=None)
         pars.add_argument("--smooth_power", type=float, default=None)
+        pars.add_argument("--elastica_length", type=float, default=0.0)
+        pars.add_argument("--elastica_length_factor", type=float, default=None)
         pars.add_argument("--segments", type=int, default=0)
         pars.add_argument("--max_angle", type=float, default=18.0)
         pars.add_argument("--max_node_distance", type=float, default=0.0)
@@ -340,10 +407,17 @@ class FancyBoxes(inkex.EffectExtension):
         mode = self.options.mode
         profile = self.options.profile
         profile_power = None
+        elastica_length = 0.0
         if mode != "exact_g2":
             max_node_distance = max(0.0, self.unit_value(self.options.max_node_distance, unit))
             if profile == "elastica":
                 profile_power = None
+                if self.options.elastica_length_factor is not None:
+                    elastica_length_req = max(0.0, float(self.options.elastica_length_factor)) * e
+                else:
+                    elastica_length_req = max(0.0, self.unit_value(self.options.elastica_length, unit))
+                min_len, max_len = ElasticaCorner.length_bounds(e)
+                elastica_length = clamp(elastica_length_req, min_len, max_len)
             else:
                 if profile == "smooth_step":
                     profile_power = self.options.smooth_power
@@ -371,6 +445,7 @@ class FancyBoxes(inkex.EffectExtension):
                         e,
                         segments=self.auto_segments(mode),
                         max_node_distance=max_node_distance,
+                        target_length=elastica_length,
                     ).commands()
                 else:
                     corner_cmds = ProfileCorner(
@@ -406,6 +481,8 @@ class FancyBoxes(inkex.EffectExtension):
             node.set("data-fancy-box-profile", profile)
             if profile_power is not None:
                 node.set("data-fancy-box-profile-power", fmt(profile_power))
+            if profile == "elastica" and elastica_length > 0.0:
+                node.set("data-fancy-box-elastica-length", fmt(elastica_length))
         node.set("data-fancy-box-segments-per-corner", str(self.auto_segments(mode)))
         if e_req > e:
             inkex.errormsg("Corner size was clamped to half of the smaller box dimension: %s %s" % (fmt(e), unit))

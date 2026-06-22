@@ -44,7 +44,7 @@
           <param name="smooth_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses t^p(1 - t)^p.">2</param>
         </page>
         <page name="elastica" gui-text="Euler elastica">
-          <label gui-hidden="true">Minimum bending-energy rod with fixed endpoints and tangents</label>
+          <param name="elastica_length_factor" type="float" appearance="full" min="1.5" max="1.578745" precision="6" gui-text="Rod length / corner extent" gui-description="Default is the computed sliding elastica length. pi/2 is the circular arc length.">1.578745</param>
         </page>
       </param>
     </page>
