@@ -34,6 +34,7 @@
       <label appearance="header">Approximation</label>
       <param name="segments" type="int" min="0" max="32" gui-text="Cubic segments per corner; 0 = auto">0</param>
       <param name="max_angle" type="float" min="5" max="90" precision="1" gui-text="Auto mode: max tangent turn per cubic, degrees">18</param>
+      <param name="max_node_distance" type="float" min="0" max="100000" precision="3" gui-text="Max node spacing; 0 = no limit">0</param>
       <separator />
       <param name="profile" type="notebook">
         <page name="sin_p" gui-text="sin^p">
@@ -41,6 +42,9 @@
         </page>
         <page name="smooth_step" gui-text="smooth_step">
           <param name="smooth_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses t^p(1 - t)^p.">2</param>
+        </page>
+        <page name="elastica" gui-text="Euler elastica">
+          <label gui-hidden="true">Minimum bending-energy rod with fixed endpoints and tangents</label>
         </page>
       </param>
     </page>

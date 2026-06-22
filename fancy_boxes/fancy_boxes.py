@@ -49,12 +49,13 @@ class ProfileCorner:
     which gives visually stable node placement and identical corners.
     """
 
-    def __init__(self, extent, power=2.0, segments=4, samples=4096, profile="sin_p"):
+    def __init__(self, extent, power=2.0, segments=4, samples=4096, profile="sin_p", max_node_distance=0.0):
         self.extent = float(extent)
         self.power = float(power)
         self.profile = profile
         self.segments = max(1, int(segments))
         self.samples = max(512, int(samples))
+        self.max_node_distance = max(0.0, float(max_node_distance))
         self.theta_total = math.pi / 2.0
         self._build_tables()
 
@@ -112,11 +113,56 @@ class ProfileCorner:
         f = (target - a) / (b - a)
         return self.u_table[j - 1] * (1.0 - f) + self.u_table[j] * f
 
+    def _segment_us(self):
+        base = [self._u_for_angle_fraction(i / self.segments) for i in range(self.segments + 1)]
+        if self.max_node_distance <= 0.0:
+            return base
+        refined = [base[0]]
+        for u0, u1 in zip(base, base[1:]):
+            arc_len = self.L * (u1 - u0)
+            pieces = max(1, int(math.ceil(arc_len / self.max_node_distance)))
+            for j in range(1, pieces + 1):
+                refined.append(u0 + (u1 - u0) * j / pieces)
+        return refined
+
+    @staticmethod
+    def _bounded_handles(x0, y0, x1, y1, a0, a1, ds):
+        eps = 1e-12
+        dx = max(0.0, x1 - x0)
+        dy = max(0.0, y1 - y0)
+        t0x, t0y = math.cos(a0), math.sin(a0)
+        t1x, t1y = math.cos(a1), math.sin(a1)
+        alpha = ds / 3.0
+        beta = ds / 3.0
+
+        if t0x > eps:
+            alpha = min(alpha, dx / t0x)
+        if t0y > eps:
+            alpha = min(alpha, dy / t0y)
+        if t1x > eps:
+            beta = min(beta, dx / t1x)
+        if t1y > eps:
+            beta = min(beta, dy / t1y)
+
+        span_x = alpha * t0x + beta * t1x
+        if span_x > dx and span_x > eps:
+            scale = dx / span_x
+            alpha *= scale
+            beta *= scale
+        span_y = alpha * t0y + beta * t1y
+        if span_y > dy and span_y > eps:
+            scale = dy / span_y
+            alpha *= scale
+            beta *= scale
+
+        c1 = (x0 + t0x * alpha, y0 + t0y * alpha)
+        c2 = (x1 - t1x * beta, y1 - t1y * beta)
+        return c1, c2
+
     def commands(self):
         cmds = []
-        us = [self._u_for_angle_fraction(i / self.segments) for i in range(self.segments + 1)]
-        for i in range(self.segments):
-            u0, u1 = us[i], us[i + 1]
+        us = self._segment_us()
+        for u0, u1 in zip(us, us[1:]):
             x0 = self._interp(self.x_table, u0)
             y0 = self._interp(self.y_table, u0)
             x1 = self._interp(self.x_table, u1)
@@ -124,10 +170,83 @@ class ProfileCorner:
             a0 = self._interp(self.phi_table, u0)
             a1 = self._interp(self.phi_table, u1)
             ds = self.L * (u1 - u0)
-            c1 = (x0 + math.cos(a0) * ds / 3.0, y0 + math.sin(a0) * ds / 3.0)
-            c2 = (x1 - math.cos(a1) * ds / 3.0, y1 - math.sin(a1) * ds / 3.0)
+            c1, c2 = self._bounded_handles(x0, y0, x1, y1, a0, a1, ds)
             cmds.append((c1, c2, (x1, y1)))
         # Snap exact endpoint to avoid accumulated numeric drift.
+        c1, c2, _ = cmds[-1]
+        cmds[-1] = (c1, c2, (self.extent, self.extent))
+        return cmds
+
+
+class ElasticaCorner:
+    # Free-length Euler elastica for a symmetric clamped 90-degree corner.
+
+    def __init__(self, extent, segments=4, samples=4096, max_node_distance=0.0):
+        self.extent = float(extent)
+        self.segments = max(1, int(segments))
+        self.samples = max(512, int(samples))
+        self.max_node_distance = max(0.0, float(max_node_distance))
+        self.theta_total = math.pi / 2.0
+        self._build_tables()
+
+    @staticmethod
+    def _inv_curvature_weight(theta):
+        return 1.0 / math.sqrt(math.cos(theta) + math.sin(theta))
+
+    def _build_tables(self):
+        n = self.samples
+        h = self.theta_total / n
+        x = [0.0]
+        y = [0.0]
+        s = [0.0]
+        for i in range(n):
+            a0 = i * h
+            a1 = (i + 1) * h
+            w0 = self._inv_curvature_weight(a0)
+            w1 = self._inv_curvature_weight(a1)
+            x.append(x[-1] + 0.5 * (math.cos(a0) * w0 + math.cos(a1) * w1) * h)
+            y.append(y[-1] + 0.5 * (math.sin(a0) * w0 + math.sin(a1) * w1) * h)
+            s.append(s[-1] + 0.5 * (w0 + w1) * h)
+        scale = self.extent / (0.5 * (x[-1] + y[-1]))
+        self.x_table = [xx * scale for xx in x]
+        self.y_table = [yy * scale for yy in y]
+        self.s_table = [ss * scale for ss in s]
+
+    def _interp(self, table, theta):
+        if theta <= 0.0:
+            return table[0]
+        if theta >= self.theta_total:
+            return table[-1]
+        pos = theta / self.theta_total * self.samples
+        i = int(pos)
+        f = pos - i
+        return table[i] * (1.0 - f) + table[i + 1] * f
+
+    def _segment_thetas(self):
+        base = [self.theta_total * i / self.segments for i in range(self.segments + 1)]
+        if self.max_node_distance <= 0.0:
+            return base
+        refined = [base[0]]
+        for a0, a1 in zip(base, base[1:]):
+            s0 = self._interp(self.s_table, a0)
+            s1 = self._interp(self.s_table, a1)
+            pieces = max(1, int(math.ceil((s1 - s0) / self.max_node_distance)))
+            for j in range(1, pieces + 1):
+                refined.append(a0 + (a1 - a0) * j / pieces)
+        return refined
+
+    def commands(self):
+        cmds = []
+        thetas = self._segment_thetas()
+        for a0, a1 in zip(thetas, thetas[1:]):
+            x0 = self._interp(self.x_table, a0)
+            y0 = self._interp(self.y_table, a0)
+            x1 = self._interp(self.x_table, a1)
+            y1 = self._interp(self.y_table, a1)
+            s0 = self._interp(self.s_table, a0)
+            s1 = self._interp(self.s_table, a1)
+            c1, c2 = ProfileCorner._bounded_handles(x0, y0, x1, y1, a0, a1, s1 - s0)
+            cmds.append((c1, c2, (x1, y1)))
         c1, c2, _ = cmds[-1]
         cmds[-1] = (c1, c2, (self.extent, self.extent))
         return cmds
@@ -181,6 +300,7 @@ class FancyBoxes(inkex.EffectExtension):
         pars.add_argument("--smooth_power", type=float, default=None)
         pars.add_argument("--segments", type=int, default=0)
         pars.add_argument("--max_angle", type=float, default=18.0)
+        pars.add_argument("--max_node_distance", type=float, default=0.0)
 
         for prefix in ("exact", "custom"):
             pars.add_argument(f"--{prefix}_width", type=float, default=None)
@@ -221,14 +341,18 @@ class FancyBoxes(inkex.EffectExtension):
         profile = self.options.profile
         profile_power = None
         if mode != "exact_g2":
-            if profile == "smooth_step":
-                profile_power = self.options.smooth_power
+            max_node_distance = max(0.0, self.unit_value(self.options.max_node_distance, unit))
+            if profile == "elastica":
+                profile_power = None
             else:
-                profile = "sin_p"
-                profile_power = self.options.sin_power
-            if profile_power is None:
-                profile_power = self.options.power
-            profile_power = clamp(float(profile_power), 1.0, 12.0)
+                if profile == "smooth_step":
+                    profile_power = self.options.smooth_power
+                else:
+                    profile = "sin_p"
+                    profile_power = self.options.sin_power
+                if profile_power is None:
+                    profile_power = self.options.power
+                profile_power = clamp(float(profile_power), 1.0, 12.0)
 
         cx, cy = self.svg.namedview.center
         x0, y0 = cx - w / 2.0, cy - h / 2.0
@@ -242,7 +366,20 @@ class FancyBoxes(inkex.EffectExtension):
             if mode == "exact_g2":
                 corner_cmds = exact_g2_corner(e)
             else:
-                corner_cmds = ProfileCorner(e, power=profile_power, segments=self.auto_segments(mode), profile=profile).commands()
+                if profile == "elastica":
+                    corner_cmds = ElasticaCorner(
+                        e,
+                        segments=self.auto_segments(mode),
+                        max_node_distance=max_node_distance,
+                    ).commands()
+                else:
+                    corner_cmds = ProfileCorner(
+                        e,
+                        power=profile_power,
+                        segments=self.auto_segments(mode),
+                        profile=profile,
+                        max_node_distance=max_node_distance,
+                    ).commands()
 
             tokens = ["M %s,%s" % (fmt(x0 + e), fmt(y0))]
             tokens.append("L %s,%s" % (fmt(x1 - e), fmt(y0)))
@@ -267,7 +404,8 @@ class FancyBoxes(inkex.EffectExtension):
         node.set("data-fancy-box-mode", self.options.mode)
         if mode != "exact_g2":
             node.set("data-fancy-box-profile", profile)
-            node.set("data-fancy-box-profile-power", fmt(profile_power))
+            if profile_power is not None:
+                node.set("data-fancy-box-profile-power", fmt(profile_power))
         node.set("data-fancy-box-segments-per-corner", str(self.auto_segments(mode)))
         if e_req > e:
             inkex.errormsg("Corner size was clamped to half of the smaller box dimension: %s %s" % (fmt(e), unit))
