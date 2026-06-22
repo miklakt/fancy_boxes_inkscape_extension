@@ -12,8 +12,6 @@ from bisect import bisect_left
 from lxml import etree
 import inkex
 
-SVG_NS = "http://www.w3.org/2000/svg"
-
 
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
@@ -24,18 +22,6 @@ def fmt(x):
     if abs(x) < 1e-10:
         x = 0.0
     return ("%.6f" % x).rstrip("0").rstrip(".")
-
-
-def simpson_integral_sin_power(power, n=2048):
-    # Integral_0^1 sin(pi*t)^power dt. n must be even.
-    if n % 2:
-        n += 1
-    h = 1.0 / n
-    acc = math.sin(0.0) ** power + math.sin(math.pi) ** power
-    for i in range(1, n):
-        coeff = 4 if i % 2 else 2
-        acc += coeff * (math.sin(math.pi * i * h) ** power)
-    return acc * h / 3.0
 
 
 class ProfileCorner:
@@ -179,7 +165,7 @@ class ProfileCorner:
 
 
 class ElasticaCorner:
-    # Free-length Euler elastica for a symmetric clamped 90-degree corner.
+    # Euler elastica for a symmetric clamped 90-degree corner.
 
     def __init__(self, extent, segments=4, samples=4096, max_node_distance=0.0, target_length=0.0):
         self.extent = float(extent)
@@ -188,8 +174,8 @@ class ElasticaCorner:
         self.max_node_distance = max(0.0, float(max_node_distance))
         self.target_length = max(0.0, float(target_length))
         self.theta_total = math.pi / 2.0
-        self.sliding_length_ratio = self._sliding_length_ratio()
-        if self.target_length <= 0.0 or self.target_length >= self.sliding_length_ratio * self.extent - 1e-9:
+        sliding_length = self._sliding_length_ratio() * self.extent
+        if self.target_length <= 0.0 or self.target_length >= sliding_length - 1e-9:
             self.mu = None
         else:
             self.mu = self._solve_mu_for_length()
@@ -351,49 +337,37 @@ def append_corner(path_tokens, cmds, origin, rotation_quarters):
 
 class FancyBoxes(inkex.EffectExtension):
     def add_arguments(self, pars):
-        # Legacy names are kept so older command-line invocations still work.
-        pars.add_argument("--width", type=float, default=200.0)
-        pars.add_argument("--height", type=float, default=100.0)
-        pars.add_argument("--corner", type=float, default=20.0)
-        pars.add_argument("--unit", default="px")
-        pars.add_argument("--label", default="Fancy box")
-
         pars.add_argument("--mode", default="exact_g2")
         pars.add_argument("--profile", default="sin_p")
-        pars.add_argument("--power", type=float, default=2.0)
-        pars.add_argument("--sin_power", type=float, default=None)
-        pars.add_argument("--smooth_power", type=float, default=None)
-        pars.add_argument("--elastica_length", type=float, default=0.0)
-        pars.add_argument("--elastica_length_factor", type=float, default=None)
+        pars.add_argument("--sin_power", type=float, default=2.0)
+        pars.add_argument("--smooth_power", type=float, default=2.0)
+        pars.add_argument("--elastica_length_factor", type=float, default=1.578745)
         pars.add_argument("--segments", type=int, default=0)
         pars.add_argument("--max_angle", type=float, default=18.0)
         pars.add_argument("--max_node_distance", type=float, default=0.0)
 
         for prefix in ("exact", "custom"):
-            pars.add_argument(f"--{prefix}_width", type=float, default=None)
-            pars.add_argument(f"--{prefix}_height", type=float, default=None)
-            pars.add_argument(f"--{prefix}_corner", type=float, default=None)
-            pars.add_argument(f"--{prefix}_unit", default=None)
-            pars.add_argument(f"--{prefix}_label", default=None)
+            pars.add_argument(f"--{prefix}_width", type=float, default=200.0)
+            pars.add_argument(f"--{prefix}_height", type=float, default=100.0)
+            pars.add_argument(f"--{prefix}_corner", type=float, default=20.0)
+            pars.add_argument(f"--{prefix}_unit", default="px")
+            pars.add_argument(f"--{prefix}_label", default="Fancy box")
 
     def mode_option(self, name):
         prefix = "exact" if self.options.mode == "exact_g2" else "custom"
-        value = getattr(self.options, f"{prefix}_{name}", None)
-        if value is not None:
-            return value
-        return getattr(self.options, name)
+        return getattr(self.options, f"{prefix}_{name}")
 
     def unit_value(self, value, unit):
         return self.svg.unittouu(str(value) + unit)
 
-    def auto_segments(self, mode):
+    def auto_segments(self):
         if self.options.segments and self.options.segments > 0:
             return max(1, self.options.segments)
         # Equal tangent-angle segmentation. This keeps node placement comparable
         # across boxes and puts more representational power where visual turn occurs.
         max_ang = clamp(float(self.options.max_angle), 5.0, 90.0)
         base = int(math.ceil(90.0 / max_ang))
-        if mode == "exact_g2":
+        if self.options.mode == "exact_g2":
             return 1
         return max(2, base)
 
@@ -406,16 +380,13 @@ class FancyBoxes(inkex.EffectExtension):
         e = clamp(e_req, 0.0, min(w, h) / 2.0)
         mode = self.options.mode
         profile = self.options.profile
+        segments = self.auto_segments()
         profile_power = None
         elastica_length = 0.0
         if mode != "exact_g2":
             max_node_distance = max(0.0, self.unit_value(self.options.max_node_distance, unit))
             if profile == "elastica":
-                profile_power = None
-                if self.options.elastica_length_factor is not None:
-                    elastica_length_req = max(0.0, float(self.options.elastica_length_factor)) * e
-                else:
-                    elastica_length_req = max(0.0, self.unit_value(self.options.elastica_length, unit))
+                elastica_length_req = max(0.0, float(self.options.elastica_length_factor)) * e
                 min_len, max_len = ElasticaCorner.length_bounds(e)
                 elastica_length = clamp(elastica_length_req, min_len, max_len)
             else:
@@ -424,8 +395,6 @@ class FancyBoxes(inkex.EffectExtension):
                 else:
                     profile = "sin_p"
                     profile_power = self.options.sin_power
-                if profile_power is None:
-                    profile_power = self.options.power
                 profile_power = clamp(float(profile_power), 1.0, 12.0)
 
         cx, cy = self.svg.namedview.center
@@ -437,13 +406,13 @@ class FancyBoxes(inkex.EffectExtension):
                 fmt(x0), fmt(y0), fmt(x1), fmt(y0), fmt(x1), fmt(y1), fmt(x0), fmt(y1)
             )
         else:
-            if mode == "exact_g2":
+            if self.options.mode == "exact_g2":
                 corner_cmds = exact_g2_corner(e)
             else:
                 if profile == "elastica":
                     corner_cmds = ElasticaCorner(
                         e,
-                        segments=self.auto_segments(mode),
+                        segments=segments,
                         max_node_distance=max_node_distance,
                         target_length=elastica_length,
                     ).commands()
@@ -451,7 +420,7 @@ class FancyBoxes(inkex.EffectExtension):
                     corner_cmds = ProfileCorner(
                         e,
                         power=profile_power,
-                        segments=self.auto_segments(mode),
+                        segments=segments,
                         profile=profile,
                         max_node_distance=max_node_distance,
                     ).commands()
@@ -483,7 +452,7 @@ class FancyBoxes(inkex.EffectExtension):
                 node.set("data-fancy-box-profile-power", fmt(profile_power))
             if profile == "elastica" and elastica_length > 0.0:
                 node.set("data-fancy-box-elastica-length", fmt(elastica_length))
-        node.set("data-fancy-box-segments-per-corner", str(self.auto_segments(mode)))
+        node.set("data-fancy-box-segments-per-corner", str(segments))
         if e_req > e:
             inkex.errormsg("Corner size was clamped to half of the smaller box dimension: %s %s" % (fmt(e), unit))
 

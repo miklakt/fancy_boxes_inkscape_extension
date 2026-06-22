@@ -44,12 +44,10 @@ fi
 target_dir="$extensions_dir/fancy_boxes"
 mkdir -p "$target_dir"
 
-# Remove legacy flat installs made by older versions of this installer.
+# Remove flat installs made by older versions of this installer.
 rm -f "$extensions_dir/fancy_boxes.inx" "$extensions_dir/fancy_boxes.py"
 
-for inx_file in "$source_dir"/*.inx; do
-  install -m 0644 "$inx_file" "$target_dir/$(basename -- "$inx_file")"
-done
+install -m 0644 "$source_dir/fancy_boxes.inx" "$target_dir/fancy_boxes.inx"
 install -m 0755 "$source_dir/fancy_boxes.py" "$target_dir/fancy_boxes.py"
 
 cat <<EOF
