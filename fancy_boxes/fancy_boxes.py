@@ -165,100 +165,57 @@ class ProfileCorner:
 
 
 class ElasticaCorner:
-    # Euler elastica for a symmetric clamped 90-degree corner.
+    """Euler elastica with zero curvature at the two straight-edge joins."""
 
-    def __init__(self, extent, segments=4, samples=4096, max_node_distance=0.0, target_length=0.0):
+    def __init__(self, extent, segments=4, samples=4096, max_node_distance=0.0):
         self.extent = float(extent)
         self.segments = max(1, int(segments))
         self.samples = max(512, int(samples))
         self.max_node_distance = max(0.0, float(max_node_distance))
-        self.target_length = max(0.0, float(target_length))
         self.theta_total = math.pi / 2.0
-        sliding_length = self._sliding_length_ratio() * self.extent
-        if self.target_length <= 0.0 or self.target_length >= sliding_length - 1e-9:
-            self.mu = None
-        else:
-            self.mu = self._solve_mu_for_length()
         self._build_tables()
 
-    def _inv_curvature_weight(self, theta):
-        q = math.cos(theta) + math.sin(theta)
-        if self.mu is None:
-            return 1.0 / math.sqrt(q)
-        return 1.0 / math.sqrt(max(1e-15, 1.0 + self.mu * q))
-
-    @classmethod
-    def _sliding_length_ratio(cls):
-        n = 4096
-        theta_total = math.pi / 2.0
-        h = theta_total / n
-        x = 0.0
-        s = 0.0
-        for i in range(n):
-            a0 = i * h
-            a1 = (i + 1) * h
-            w0 = 1.0 / math.sqrt(math.cos(a0) + math.sin(a0))
-            w1 = 1.0 / math.sqrt(math.cos(a1) + math.sin(a1))
-            x += 0.5 * (math.cos(a0) * w0 + math.cos(a1) * w1) * h
-            s += 0.5 * (w0 + w1) * h
-        return s / x
-
-    @classmethod
-    def length_bounds(cls, extent):
-        return 1.5 * extent, cls._sliding_length_ratio() * extent
-
     @staticmethod
-    def _ratio_for_mu(mu, n=1024):
-        theta_total = math.pi / 2.0
-        h = theta_total / n
-        x = 0.0
-        s = 0.0
-        for i in range(n):
-            a0 = i * h
-            a1 = (i + 1) * h
-            q0 = math.cos(a0) + math.sin(a0)
-            q1 = math.cos(a1) + math.sin(a1)
-            w0 = 1.0 / math.sqrt(max(1e-15, 1.0 + mu * q0))
-            w1 = 1.0 / math.sqrt(max(1e-15, 1.0 + mu * q1))
-            x += 0.5 * (math.cos(a0) * w0 + math.cos(a1) * w1) * h
-            s += 0.5 * (w0 + w1) * h
-        return s / x
+    def _smoothstep(t):
+        return t * t * (3.0 - 2.0 * t)
 
-    def _solve_mu_for_length(self):
-        min_len, max_len = self.length_bounds(self.extent)
-        target = clamp(self.target_length, min_len, max_len) / self.extent
-        circle_ratio = math.pi / 2.0
-        if target <= circle_ratio:
-            lo = -1.0 / math.sqrt(2.0) + 1e-9
-            hi = 0.0
-        else:
-            lo = 0.0
-            hi = 1.0
-            while self._ratio_for_mu(hi) < target and hi < 1e9:
-                hi *= 2.0
-        for _ in range(64):
-            mid = 0.5 * (lo + hi)
-            if self._ratio_for_mu(mid) < target:
-                lo = mid
+    def _theta_for_t(self, t):
+        return self.theta_total * self._smoothstep(t)
+
+    def _density(self, t, component):
+        theta = self._theta_for_t(t)
+        dtheta_dt = self.theta_total * 6.0 * t * (1.0 - t)
+        q = math.cos(theta) + math.sin(theta) - 1.0
+        if q <= 1e-14:
+            base = 2.0 * math.sqrt(3.0 * self.theta_total)
+            if t <= 0.5:
+                theta = 0.0
             else:
-                hi = mid
-        return 0.5 * (lo + hi)
+                theta = self.theta_total
+        else:
+            base = dtheta_dt / math.sqrt(q)
+
+        if component == "x":
+            return math.cos(theta) * base
+        if component == "y":
+            return math.sin(theta) * base
+        return base
 
     def _build_tables(self):
         n = self.samples
-        h = self.theta_total / n
+        theta = [self._theta_for_t(i / n) for i in range(n + 1)]
         x = [0.0]
         y = [0.0]
         s = [0.0]
         for i in range(n):
-            a0 = i * h
-            a1 = (i + 1) * h
-            w0 = self._inv_curvature_weight(a0)
-            w1 = self._inv_curvature_weight(a1)
-            x.append(x[-1] + 0.5 * (math.cos(a0) * w0 + math.cos(a1) * w1) * h)
-            y.append(y[-1] + 0.5 * (math.sin(a0) * w0 + math.sin(a1) * w1) * h)
-            s.append(s[-1] + 0.5 * (w0 + w1) * h)
+            t0 = i / n
+            t1 = (i + 1) / n
+            h = t1 - t0
+            x.append(x[-1] + 0.5 * (self._density(t0, "x") + self._density(t1, "x")) * h)
+            y.append(y[-1] + 0.5 * (self._density(t0, "y") + self._density(t1, "y")) * h)
+            s.append(s[-1] + 0.5 * (self._density(t0, "s") + self._density(t1, "s")) * h)
         scale = self.extent / (0.5 * (x[-1] + y[-1]))
+        self.theta_table = theta
         self.x_table = [xx * scale for xx in x]
         self.y_table = [yy * scale for yy in y]
         self.s_table = [ss * scale for ss in s]
@@ -268,10 +225,18 @@ class ElasticaCorner:
             return table[0]
         if theta >= self.theta_total:
             return table[-1]
-        pos = theta / self.theta_total * self.samples
-        i = int(pos)
-        f = pos - i
-        return table[i] * (1.0 - f) + table[i + 1] * f
+        tbl = self.theta_table
+        j = bisect_left(tbl, theta)
+        if j <= 0:
+            return table[0]
+        if j >= len(tbl):
+            return table[-1]
+        a = tbl[j - 1]
+        b = tbl[j]
+        if abs(b - a) < 1e-15:
+            return table[j]
+        f = (theta - a) / (b - a)
+        return table[j - 1] * (1.0 - f) + table[j] * f
 
     def _segment_thetas(self):
         base = [self.theta_total * i / self.segments for i in range(self.segments + 1)]
@@ -286,17 +251,50 @@ class ElasticaCorner:
                 refined.append(a0 + (a1 - a0) * j / pieces)
         return refined
 
+    @staticmethod
+    def _handles(x0, y0, x1, y1, a0, a1, ds, zero_start=False, zero_end=False):
+        if zero_start and zero_end:
+            return (x1, y0), (x1, y0)
+
+        eps = 1e-12
+        if zero_start and math.sin(a1) > eps:
+            beta = y1 / math.sin(a1)
+            c2 = (x1 - math.cos(a1) * beta, y0)
+            if c2[0] >= x0 - eps:
+                alpha = min(ds / 3.0, max(0.0, c2[0] - x0))
+                return (x0 + alpha, y0), c2
+
+        if zero_end and math.cos(a0) > eps:
+            alpha = (x1 - x0) / math.cos(a0)
+            c1 = (x1, y0 + math.sin(a0) * alpha)
+            if c1[1] <= y1 + eps:
+                beta = min(ds / 3.0, max(0.0, y1 - c1[1]))
+                return c1, (x1, y1 - beta)
+
+        return ProfileCorner._bounded_handles(x0, y0, x1, y1, a0, a1, ds)
+
     def commands(self):
         cmds = []
         thetas = self._segment_thetas()
-        for a0, a1 in zip(thetas, thetas[1:]):
+        last = len(thetas) - 2
+        for i, (a0, a1) in enumerate(zip(thetas, thetas[1:])):
             x0 = self._interp(self.x_table, a0)
             y0 = self._interp(self.y_table, a0)
             x1 = self._interp(self.x_table, a1)
             y1 = self._interp(self.y_table, a1)
             s0 = self._interp(self.s_table, a0)
             s1 = self._interp(self.s_table, a1)
-            c1, c2 = ProfileCorner._bounded_handles(x0, y0, x1, y1, a0, a1, s1 - s0)
+            c1, c2 = self._handles(
+                x0,
+                y0,
+                x1,
+                y1,
+                a0,
+                a1,
+                s1 - s0,
+                zero_start=(i == 0),
+                zero_end=(i == last),
+            )
             cmds.append((c1, c2, (x1, y1)))
         c1, c2, _ = cmds[-1]
         cmds[-1] = (c1, c2, (self.extent, self.extent))
@@ -341,7 +339,6 @@ class FancyBoxes(inkex.EffectExtension):
         pars.add_argument("--profile", default="sin_p")
         pars.add_argument("--sin_power", type=float, default=2.0)
         pars.add_argument("--smooth_power", type=float, default=2.0)
-        pars.add_argument("--elastica_length_factor", type=float, default=1.578745)
         pars.add_argument("--segments", type=int, default=0)
         pars.add_argument("--max_angle", type=float, default=18.0)
         pars.add_argument("--max_node_distance", type=float, default=0.0)
@@ -382,14 +379,9 @@ class FancyBoxes(inkex.EffectExtension):
         profile = self.options.profile
         segments = self.auto_segments()
         profile_power = None
-        elastica_length = 0.0
         if mode != "exact_g2":
             max_node_distance = max(0.0, self.unit_value(self.options.max_node_distance, unit))
-            if profile == "elastica":
-                elastica_length_req = max(0.0, float(self.options.elastica_length_factor)) * e
-                min_len, max_len = ElasticaCorner.length_bounds(e)
-                elastica_length = clamp(elastica_length_req, min_len, max_len)
-            else:
+            if profile != "elastica":
                 if profile == "smooth_step":
                     profile_power = self.options.smooth_power
                 else:
@@ -414,7 +406,6 @@ class FancyBoxes(inkex.EffectExtension):
                         e,
                         segments=segments,
                         max_node_distance=max_node_distance,
-                        target_length=elastica_length,
                     ).commands()
                 else:
                     corner_cmds = ProfileCorner(
@@ -450,8 +441,6 @@ class FancyBoxes(inkex.EffectExtension):
             node.set("data-fancy-box-profile", profile)
             if profile_power is not None:
                 node.set("data-fancy-box-profile-power", fmt(profile_power))
-            if profile == "elastica" and elastica_length > 0.0:
-                node.set("data-fancy-box-elastica-length", fmt(elastica_length))
         node.set("data-fancy-box-segments-per-corner", str(segments))
         if e_req > e:
             inkex.errormsg("Corner size was clamped to half of the smaller box dimension: %s %s" % (fmt(e), unit))

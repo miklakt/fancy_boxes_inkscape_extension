@@ -37,14 +37,14 @@
       <param name="max_node_distance" type="float" min="0" max="100000" precision="3" gui-text="Max node spacing; 0 = no limit">0</param>
       <separator />
       <param name="profile" type="notebook">
+        <page name="elastica" gui-text="Euler elastica">
+          <label>Elastic rod bending freely between straight wall-contact segments.</label>
+        </page>
         <page name="sin_p" gui-text="sin^p">
           <param name="sin_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses sin^p; p=1 gives the former profiled G2 curve, p=2 gives the former sine-squared profile.">2</param>
         </page>
         <page name="smooth_step" gui-text="smooth_step">
           <param name="smooth_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses t^p(1 - t)^p.">2</param>
-        </page>
-        <page name="elastica" gui-text="Euler elastica">
-          <param name="elastica_length_factor" type="float" appearance="full" min="1.5" max="1.578745" precision="6" gui-text="Rod length / corner extent" gui-description="Default is the computed sliding elastica length. pi/2 is the circular arc length.">1.578745</param>
         </page>
       </param>
     </page>
