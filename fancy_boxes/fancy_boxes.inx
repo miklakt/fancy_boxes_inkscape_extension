@@ -44,6 +44,9 @@
           <label>Curvature ramps linearly into and out of a circular arc.</label>
           <param name="clothoid_plateau" type="float" appearance="full" min="0" max="1" precision="3" gui-text="Arc plateau" gui-description="0 = pure clothoid; 1 = circular arc.">0</param>
         </page>
+        <page name="squircle" gui-text="Squircle">
+          <param name="squircle_power" type="float" appearance="full" min="2.001" max="24" precision="3" gui-text="p exponent" gui-description="Superellipse corner; p > 2 gives zero endpoint curvature.">5</param>
+        </page>
         <page name="sin_p" gui-text="sin^p">
           <param name="sin_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses sin^p; p=1 gives the former profiled G2 curve, p=2 gives the former sine-squared profile.">2</param>
         </page>
@@ -51,6 +54,26 @@
           <param name="smooth_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses t^p(1 - t)^p.">2</param>
         </page>
       </param>
+    </page>
+    <page name="superellipse" gui-text="Superellipse">
+      <label appearance="header">Box size</label>
+      <param name="super_width" type="float" min="0.001" max="100000" precision="3" gui-text="Width">200</param>
+      <param name="super_height" type="float" min="0.001" max="100000" precision="3" gui-text="Height">100</param>
+      <param name="super_unit" type="optiongroup" appearance="combo" gui-text="Units">
+        <option value="px">px</option>
+        <option value="mm">mm</option>
+        <option value="cm">cm</option>
+        <option value="in">in</option>
+        <option value="pt">pt</option>
+      </param>
+      <param name="super_label" type="string" gui-text="Object label">Superellipse</param>
+      <separator />
+      <param name="super_power" type="float" appearance="full" min="2" max="24" precision="3" gui-text="p exponent" gui-description="2 = ellipse; larger values make flatter sides and squarer corners.">5</param>
+      <separator />
+      <label appearance="header">Approximation</label>
+      <param name="super_segments" type="int" min="0" max="128" gui-text="Cubic segments; 0 = auto">0</param>
+      <param name="super_max_angle" type="float" min="5" max="90" precision="1" gui-text="Auto mode: max turn per cubic, degrees">18</param>
+      <param name="super_max_node_distance" type="float" min="0" max="100000" precision="3" gui-text="Max node spacing; 0 = no limit">0</param>
     </page>
   </param>
   <effect>

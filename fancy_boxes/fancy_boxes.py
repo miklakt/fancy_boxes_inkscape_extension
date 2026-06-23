@@ -91,6 +91,10 @@ def refine_segments(base, length_between, max_node_distance):
     return refined
 
 
+def auto_segments_for_angle(total_degrees, max_angle, minimum):
+    return max(minimum, int(math.ceil(total_degrees / clamp(float(max_angle), 5.0, 90.0))))
+
+
 def corner_commands(params, segment_data, extent):
     cmds = []
     last = len(params) - 2
@@ -347,6 +351,116 @@ def append_corner(path_tokens, cmds, origin, rotation_quarters):
         path_tokens.append("C %s,%s %s,%s %s,%s" % (fmt(q1[0]), fmt(q1[1]), fmt(q2[0]), fmt(q2[1]), fmt(q[0]), fmt(q[1])))
 
 
+def sampled_length(point_at, t0, t1, pieces=8):
+    total = 0.0
+    px, py = point_at(t0)
+    for i in range(1, pieces + 1):
+        t = t0 + (t1 - t0) * i / pieces
+        x, y = point_at(t)
+        total += math.hypot(x - px, y - py)
+        px, py = x, y
+    return total
+
+
+def append_parametric_cubic(tokens, point_at, angle_at, length_between, p0, p1, bounds=None):
+    x0, y0 = point_at(p0)
+    x1, y1 = point_at(p1)
+    a0 = angle_at(p0)
+    a1 = angle_at(p1)
+    ds = length_between(p0, p1)
+    c1 = (x0 + math.cos(a0) * ds / 3.0, y0 + math.sin(a0) * ds / 3.0)
+    c2 = (x1 - math.cos(a1) * ds / 3.0, y1 - math.sin(a1) * ds / 3.0)
+    if bounds is not None:
+        x_min, y_min, x_max, y_max = bounds
+        c1 = (clamp(c1[0], x_min, x_max), clamp(c1[1], y_min, y_max))
+        c2 = (clamp(c2[0], x_min, x_max), clamp(c2[1], y_min, y_max))
+    tokens.append("C %s,%s %s,%s %s,%s" % (fmt(c1[0]), fmt(c1[1]), fmt(c2[0]), fmt(c2[1]), fmt(x1), fmt(y1)))
+
+
+def superellipse_point(cx, cy, rx, ry, power, t):
+    q = 2.0 / power
+    c = math.cos(t)
+    s = math.sin(t)
+    x = cx + rx * math.copysign(abs(c) ** q, c)
+    y = cy + ry * math.copysign(abs(s) ** q, s)
+    return x, y
+
+
+def superellipse_tangent_angle(rx, ry, power, t):
+    q = 2.0 / power
+    c = math.cos(t)
+    s = math.sin(t)
+    eps = 1e-12
+    if abs(s) < eps:
+        return math.pi / 2.0 if c >= 0.0 else -math.pi / 2.0
+    if abs(c) < eps:
+        return math.pi if s >= 0.0 else 0.0
+    dx = -rx * q * s * (abs(c) ** (q - 1.0))
+    dy = ry * q * c * (abs(s) ** (q - 1.0))
+    return math.atan2(dy, dx)
+
+
+def superellipse_path(cx, cy, width, height, power, segments, max_node_distance):
+    rx = width / 2.0
+    ry = height / 2.0
+    power = clamp(float(power), 2.0, 24.0)
+    point_at = lambda t: superellipse_point(cx, cy, rx, ry, power, t)
+    angle_at = lambda t: superellipse_tangent_angle(rx, ry, power, t)
+    length_between = lambda t0, t1: sampled_length(point_at, t0, t1)
+    base = [2.0 * math.pi * i / segments for i in range(segments + 1)]
+    params = refine_segments(base, length_between, max_node_distance)
+
+    x0, y0 = point_at(params[0])
+    tokens = ["M %s,%s" % (fmt(x0), fmt(y0))]
+    for t0, t1 in zip(params, params[1:]):
+        append_parametric_cubic(
+            tokens,
+            point_at,
+            angle_at,
+            length_between,
+            t0,
+            t1,
+            bounds=(cx - rx, cy - ry, cx + rx, cy + ry),
+        )
+    tokens.append("Z")
+    return " ".join(tokens)
+
+
+def squircle_corner_point(extent, power, t):
+    q = 2.0 / power
+    return extent * (math.sin(t) ** q), extent * (1.0 - math.cos(t) ** q)
+
+
+def squircle_corner_angle(power, t):
+    eps = 1e-12
+    if t <= eps:
+        return 0.0
+    if t >= math.pi / 2.0 - eps:
+        return math.pi / 2.0
+    q = 2.0 / power
+    dx = q * math.cos(t) * (math.sin(t) ** (q - 1.0))
+    dy = q * math.sin(t) * (math.cos(t) ** (q - 1.0))
+    return math.atan2(dy, dx)
+
+
+def squircle_corner(extent, power, segments, max_node_distance):
+    power = clamp(float(power), 2.001, 24.0)
+    point_at = lambda t: squircle_corner_point(extent, power, t)
+    length_between = lambda t0, t1: sampled_length(point_at, t0, t1)
+    base = [0.5 * math.pi * i / segments for i in range(segments + 1)]
+    params = refine_segments(base, length_between, max_node_distance)
+
+    def segment_data(t0, t1):
+        x0, y0 = point_at(t0)
+        x1, y1 = point_at(t1)
+        a0 = squircle_corner_angle(power, t0)
+        a1 = squircle_corner_angle(power, t1)
+        ds = length_between(t0, t1)
+        return x0, y0, x1, y1, a0, a1, ds
+
+    return corner_commands(params, segment_data, extent)
+
+
 class FancyBoxes(inkex.EffectExtension):
     def add_arguments(self, pars):
         pars.add_argument("--mode", default="exact_g2")
@@ -354,19 +468,26 @@ class FancyBoxes(inkex.EffectExtension):
         pars.add_argument("--sin_power", type=float, default=2.0)
         pars.add_argument("--smooth_power", type=float, default=2.0)
         pars.add_argument("--clothoid_plateau", type=float, default=0.0)
+        pars.add_argument("--squircle_power", type=float, default=5.0)
         pars.add_argument("--segments", type=int, default=0)
         pars.add_argument("--max_angle", type=float, default=18.0)
         pars.add_argument("--max_node_distance", type=float, default=0.0)
+        pars.add_argument("--super_power", type=float, default=5.0)
+        pars.add_argument("--super_segments", type=int, default=0)
+        pars.add_argument("--super_max_angle", type=float, default=18.0)
+        pars.add_argument("--super_max_node_distance", type=float, default=0.0)
 
-        for prefix in ("exact", "custom"):
+        for prefix in ("exact", "custom", "super"):
             pars.add_argument(f"--{prefix}_width", type=float, default=200.0)
             pars.add_argument(f"--{prefix}_height", type=float, default=100.0)
-            pars.add_argument(f"--{prefix}_corner", type=float, default=20.0)
             pars.add_argument(f"--{prefix}_unit", default="px")
             pars.add_argument(f"--{prefix}_label", default="Fancy box")
+        pars.add_argument("--exact_corner", type=float, default=20.0)
+        pars.add_argument("--custom_corner", type=float, default=20.0)
 
     def mode_option(self, name):
-        prefix = "exact" if self.options.mode == "exact_g2" else "custom"
+        prefixes = {"exact_g2": "exact", "custom": "custom", "superellipse": "super"}
+        prefix = prefixes.get(self.options.mode, "custom")
         return getattr(self.options, f"{prefix}_{name}")
 
     def unit_value(self, value, unit):
@@ -377,11 +498,9 @@ class FancyBoxes(inkex.EffectExtension):
             return max(1, self.options.segments)
         # Equal tangent-angle segmentation. This keeps node placement comparable
         # across boxes and puts more representational power where visual turn occurs.
-        max_ang = clamp(float(self.options.max_angle), 5.0, 90.0)
-        base = int(math.ceil(90.0 / max_ang))
         if self.options.mode == "exact_g2":
             return 1
-        return max(2, base)
+        return auto_segments_for_angle(90.0, self.options.max_angle, 2)
 
     def selected_style_attribs(self):
         selected = getattr(self.svg, "selected", None)
@@ -400,36 +519,59 @@ class FancyBoxes(inkex.EffectExtension):
         label = self.mode_option("label")
         w = max(1e-9, self.unit_value(self.mode_option("width"), unit))
         h = max(1e-9, self.unit_value(self.mode_option("height"), unit))
-        e_req = max(0.0, self.unit_value(self.mode_option("corner"), unit))
-        e = clamp(e_req, 0.0, min(w, h) / 2.0)
         mode = self.options.mode
         profile = self.options.profile
         segments = self.auto_segments()
         profile_power = None
-        if mode != "exact_g2":
+        if mode == "superellipse":
+            max_node_distance = max(0.0, self.unit_value(self.options.super_max_node_distance, unit))
+        elif mode != "exact_g2":
             max_node_distance = max(0.0, self.unit_value(self.options.max_node_distance, unit))
             if profile != "elastica":
                 if profile == "smooth_step":
                     profile_power = self.options.smooth_power
                 elif profile == "clothoid":
                     profile_power = self.options.clothoid_plateau
+                elif profile == "squircle":
+                    profile_power = self.options.squircle_power
                 else:
                     profile = "sin_p"
                     profile_power = self.options.sin_power
                 if profile_power is not None:
                     lo = 0.0 if profile == "clothoid" else 1.0
-                    hi = 1.0 if profile == "clothoid" else 12.0
+                    if profile == "squircle":
+                        lo = 2.001
+                    hi = 1.0 if profile == "clothoid" else 24.0 if profile == "squircle" else 12.0
                     profile_power = clamp(float(profile_power), lo, hi)
 
         cx, cy = self.svg.namedview.center
         x0, y0 = cx - w / 2.0, cy - h / 2.0
         x1, y1 = cx + w / 2.0, cy + h / 2.0
 
-        if e <= 1e-9:
+        if mode == "superellipse":
+            super_segments = max(0, int(self.options.super_segments)) or auto_segments_for_angle(
+                360.0,
+                self.options.super_max_angle,
+                8,
+            )
+            d = superellipse_path(
+                cx,
+                cy,
+                w,
+                h,
+                self.options.super_power,
+                super_segments,
+                max_node_distance,
+            )
+        else:
+            e_req = max(0.0, self.unit_value(self.mode_option("corner"), unit))
+            e = clamp(e_req, 0.0, min(w, h) / 2.0)
+
+        if mode != "superellipse" and e <= 1e-9:
             d = "M %s,%s L %s,%s L %s,%s L %s,%s Z" % (
                 fmt(x0), fmt(y0), fmt(x1), fmt(y0), fmt(x1), fmt(y1), fmt(x0), fmt(y1)
             )
-        else:
+        elif mode != "superellipse":
             if self.options.mode == "exact_g2":
                 corner_cmds = exact_g2_corner(e)
             else:
@@ -439,6 +581,13 @@ class FancyBoxes(inkex.EffectExtension):
                         segments=segments,
                         max_node_distance=max_node_distance,
                     ).commands()
+                elif profile == "squircle":
+                    corner_cmds = squircle_corner(
+                        e,
+                        profile_power,
+                        segments,
+                        max_node_distance,
+                    )
                 else:
                     corner_cmds = ProfileCorner(
                         e,
@@ -468,14 +617,20 @@ class FancyBoxes(inkex.EffectExtension):
         node = etree.SubElement(self.svg.get_current_layer(), inkex.addNS("path", "svg"), attrib)
         node.set("data-fancy-box-width", fmt(w))
         node.set("data-fancy-box-height", fmt(h))
-        node.set("data-fancy-box-corner-extent", fmt(e))
         node.set("data-fancy-box-mode", self.options.mode)
-        if mode != "exact_g2":
+        if mode == "superellipse":
+            node.set("data-fancy-box-superellipse-power", fmt(clamp(float(self.options.super_power), 2.0, 24.0)))
+            node.set("data-fancy-box-segments", str(super_segments))
+        else:
+            node.set("data-fancy-box-corner-extent", fmt(e))
+        if mode not in ("exact_g2", "superellipse"):
             node.set("data-fancy-box-profile", profile)
             if profile_power is not None:
                 node.set("data-fancy-box-profile-power", fmt(profile_power))
-        node.set("data-fancy-box-segments-per-corner", str(segments))
-        if e_req > e:
+            node.set("data-fancy-box-segments-per-corner", str(segments))
+        elif mode == "exact_g2":
+            node.set("data-fancy-box-segments-per-corner", str(segments))
+        if mode != "superellipse" and e_req > e:
             inkex.errormsg("Corner size was clamped to half of the smaller box dimension: %s %s" % (fmt(e), unit))
 
 
