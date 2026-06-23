@@ -378,6 +378,18 @@ class FancyBoxes(inkex.EffectExtension):
             return 1
         return max(2, base)
 
+    def selected_style_attribs(self):
+        selected = getattr(self.svg, "selected", None)
+        source = None
+        if selected:
+            ids = getattr(self.options, "ids", None) or []
+            source = selected.get(ids[-1]) if ids else None
+        if source is None and selected:
+            source = list(selected.values())[-1]
+        style = source.get("style") if source is not None else None
+        width = fmt(self.svg.unittouu("0.3mm"))
+        return {"style": style or "fill:none;stroke:#000000;stroke-width:%s" % width}
+
     def effect(self):
         unit = self.mode_option("unit")
         label = self.mode_option("label")
@@ -445,6 +457,7 @@ class FancyBoxes(inkex.EffectExtension):
             "d": d,
             inkex.addNS("label", "inkscape"): label,
         }
+        attrib.update(self.selected_style_attribs())
         node = etree.SubElement(self.svg.get_current_layer(), inkex.addNS("path", "svg"), attrib)
         node.set("data-fancy-box-width", fmt(w))
         node.set("data-fancy-box-height", fmt(h))
