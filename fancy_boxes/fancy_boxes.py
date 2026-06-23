@@ -138,7 +138,11 @@ class ProfileCorner:
         if self.profile == "smooth_step":
             return (u * (1.0 - u)) ** self.power
         if self.profile == "clothoid":
-            return min(u, 1.0 - u)
+            plateau = clamp(self.power, 0.0, 1.0)
+            ramp = 0.5 * (1.0 - plateau)
+            if ramp <= 1e-12:
+                return 1.0
+            return min(1.0, u / ramp, (1.0 - u) / ramp)
         return math.sin(math.pi * u) ** self.power
 
     def _build_tables(self):
@@ -349,6 +353,7 @@ class FancyBoxes(inkex.EffectExtension):
         pars.add_argument("--profile", default="sin_p")
         pars.add_argument("--sin_power", type=float, default=2.0)
         pars.add_argument("--smooth_power", type=float, default=2.0)
+        pars.add_argument("--clothoid_plateau", type=float, default=0.0)
         pars.add_argument("--segments", type=int, default=0)
         pars.add_argument("--max_angle", type=float, default=18.0)
         pars.add_argument("--max_node_distance", type=float, default=0.0)
@@ -407,12 +412,14 @@ class FancyBoxes(inkex.EffectExtension):
                 if profile == "smooth_step":
                     profile_power = self.options.smooth_power
                 elif profile == "clothoid":
-                    profile_power = None
+                    profile_power = self.options.clothoid_plateau
                 else:
                     profile = "sin_p"
                     profile_power = self.options.sin_power
                 if profile_power is not None:
-                    profile_power = clamp(float(profile_power), 1.0, 12.0)
+                    lo = 0.0 if profile == "clothoid" else 1.0
+                    hi = 1.0 if profile == "clothoid" else 12.0
+                    profile_power = clamp(float(profile_power), lo, hi)
 
         cx, cy = self.svg.namedview.center
         x0, y0 = cx - w / 2.0, cy - h / 2.0

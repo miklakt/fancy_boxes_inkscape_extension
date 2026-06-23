@@ -41,7 +41,8 @@
           <label>Elastic rod bending freely between straight wall-contact segments.</label>
         </page>
         <page name="clothoid" gui-text="Clothoid">
-          <label>Curvature ramps linearly up, then linearly back to straight.</label>
+          <label>Curvature ramps linearly into and out of a circular arc.</label>
+          <param name="clothoid_plateau" type="float" appearance="full" min="0" max="1" precision="3" gui-text="Arc plateau" gui-description="0 = pure clothoid; 1 = circular arc.">0</param>
         </page>
         <page name="sin_p" gui-text="sin^p">
           <param name="sin_power" type="float" min="1" max="12" precision="2" gui-text="p exponent" gui-description="Curvature profile uses sin^p; p=1 gives the former profiled G2 curve, p=2 gives the former sine-squared profile.">2</param>
