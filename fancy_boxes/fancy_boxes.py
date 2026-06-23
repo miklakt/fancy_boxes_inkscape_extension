@@ -24,6 +24,95 @@ def fmt(x):
     return ("%.6f" % x).rstrip("0").rstrip(".")
 
 
+def bounded_handles(x0, y0, x1, y1, a0, a1, ds):
+    eps = 1e-12
+    dx = max(0.0, x1 - x0)
+    dy = max(0.0, y1 - y0)
+    t0x, t0y = math.cos(a0), math.sin(a0)
+    t1x, t1y = math.cos(a1), math.sin(a1)
+    alpha = ds / 3.0
+    beta = ds / 3.0
+
+    if t0x > eps:
+        alpha = min(alpha, dx / t0x)
+    if t0y > eps:
+        alpha = min(alpha, dy / t0y)
+    if t1x > eps:
+        beta = min(beta, dx / t1x)
+    if t1y > eps:
+        beta = min(beta, dy / t1y)
+
+    span_x = alpha * t0x + beta * t1x
+    if span_x > dx and span_x > eps:
+        scale = dx / span_x
+        alpha *= scale
+        beta *= scale
+    span_y = alpha * t0y + beta * t1y
+    if span_y > dy and span_y > eps:
+        scale = dy / span_y
+        alpha *= scale
+        beta *= scale
+
+    c1 = (x0 + t0x * alpha, y0 + t0y * alpha)
+    c2 = (x1 - t1x * beta, y1 - t1y * beta)
+    return c1, c2
+
+
+def zero_curvature_handles(x0, y0, x1, y1, a0, a1, ds, zero_start=False, zero_end=False):
+    if zero_start and zero_end:
+        return (x1, y0), (x1, y0)
+
+    eps = 1e-12
+    if zero_start and math.sin(a1) > eps:
+        beta = y1 / math.sin(a1)
+        c2 = (x1 - math.cos(a1) * beta, y0)
+        if c2[0] >= x0 - eps:
+            alpha = min(ds / 3.0, max(0.0, c2[0] - x0))
+            return (x0 + alpha, y0), c2
+
+    if zero_end and math.cos(a0) > eps:
+        alpha = (x1 - x0) / math.cos(a0)
+        c1 = (x1, y0 + math.sin(a0) * alpha)
+        if c1[1] <= y1 + eps:
+            beta = min(ds / 3.0, max(0.0, y1 - c1[1]))
+            return c1, (x1, y1 - beta)
+
+    return bounded_handles(x0, y0, x1, y1, a0, a1, ds)
+
+
+def refine_segments(base, length_between, max_node_distance):
+    if max_node_distance <= 0.0:
+        return base
+    refined = [base[0]]
+    for p0, p1 in zip(base, base[1:]):
+        pieces = max(1, int(math.ceil(length_between(p0, p1) / max_node_distance)))
+        for j in range(1, pieces + 1):
+            refined.append(p0 + (p1 - p0) * j / pieces)
+    return refined
+
+
+def corner_commands(params, segment_data, extent):
+    cmds = []
+    last = len(params) - 2
+    for i, (p0, p1) in enumerate(zip(params, params[1:])):
+        x0, y0, x1, y1, a0, a1, ds = segment_data(p0, p1)
+        c1, c2 = zero_curvature_handles(
+            x0,
+            y0,
+            x1,
+            y1,
+            a0,
+            a1,
+            ds,
+            zero_start=(i == 0),
+            zero_end=(i == last),
+        )
+        cmds.append((c1, c2, (x1, y1)))
+    c1, c2, _ = cmds[-1]
+    cmds[-1] = (c1, c2, (extent, extent))
+    return cmds
+
+
 class ProfileCorner:
     """Canonical 90-degree corner in SVG coordinates.
 
@@ -48,6 +137,8 @@ class ProfileCorner:
     def _profile_weight(self, u):
         if self.profile == "smooth_step":
             return (u * (1.0 - u)) ** self.power
+        if self.profile == "clothoid":
+            return min(u, 1.0 - u)
         return math.sin(math.pi * u) ** self.power
 
     def _build_tables(self):
@@ -101,54 +192,16 @@ class ProfileCorner:
 
     def _segment_us(self):
         base = [self._u_for_angle_fraction(i / self.segments) for i in range(self.segments + 1)]
-        if self.max_node_distance <= 0.0:
-            return base
-        refined = [base[0]]
-        for u0, u1 in zip(base, base[1:]):
-            arc_len = self.L * (u1 - u0)
-            pieces = max(1, int(math.ceil(arc_len / self.max_node_distance)))
-            for j in range(1, pieces + 1):
-                refined.append(u0 + (u1 - u0) * j / pieces)
-        return refined
-
-    @staticmethod
-    def _bounded_handles(x0, y0, x1, y1, a0, a1, ds):
-        eps = 1e-12
-        dx = max(0.0, x1 - x0)
-        dy = max(0.0, y1 - y0)
-        t0x, t0y = math.cos(a0), math.sin(a0)
-        t1x, t1y = math.cos(a1), math.sin(a1)
-        alpha = ds / 3.0
-        beta = ds / 3.0
-
-        if t0x > eps:
-            alpha = min(alpha, dx / t0x)
-        if t0y > eps:
-            alpha = min(alpha, dy / t0y)
-        if t1x > eps:
-            beta = min(beta, dx / t1x)
-        if t1y > eps:
-            beta = min(beta, dy / t1y)
-
-        span_x = alpha * t0x + beta * t1x
-        if span_x > dx and span_x > eps:
-            scale = dx / span_x
-            alpha *= scale
-            beta *= scale
-        span_y = alpha * t0y + beta * t1y
-        if span_y > dy and span_y > eps:
-            scale = dy / span_y
-            alpha *= scale
-            beta *= scale
-
-        c1 = (x0 + t0x * alpha, y0 + t0y * alpha)
-        c2 = (x1 - t1x * beta, y1 - t1y * beta)
-        return c1, c2
+        return refine_segments(
+            base,
+            lambda u0, u1: self.L * (u1 - u0),
+            self.max_node_distance,
+        )
 
     def commands(self):
-        cmds = []
         us = self._segment_us()
-        for u0, u1 in zip(us, us[1:]):
+
+        def segment_data(u0, u1):
             x0 = self._interp(self.x_table, u0)
             y0 = self._interp(self.y_table, u0)
             x1 = self._interp(self.x_table, u1)
@@ -156,12 +209,9 @@ class ProfileCorner:
             a0 = self._interp(self.phi_table, u0)
             a1 = self._interp(self.phi_table, u1)
             ds = self.L * (u1 - u0)
-            c1, c2 = self._bounded_handles(x0, y0, x1, y1, a0, a1, ds)
-            cmds.append((c1, c2, (x1, y1)))
-        # Snap exact endpoint to avoid accumulated numeric drift.
-        c1, c2, _ = cmds[-1]
-        cmds[-1] = (c1, c2, (self.extent, self.extent))
-        return cmds
+            return x0, y0, x1, y1, a0, a1, ds
+
+        return corner_commands(us, segment_data, self.extent)
 
 
 class ElasticaCorner:
@@ -240,65 +290,25 @@ class ElasticaCorner:
 
     def _segment_thetas(self):
         base = [self.theta_total * i / self.segments for i in range(self.segments + 1)]
-        if self.max_node_distance <= 0.0:
-            return base
-        refined = [base[0]]
-        for a0, a1 in zip(base, base[1:]):
-            s0 = self._interp(self.s_table, a0)
-            s1 = self._interp(self.s_table, a1)
-            pieces = max(1, int(math.ceil((s1 - s0) / self.max_node_distance)))
-            for j in range(1, pieces + 1):
-                refined.append(a0 + (a1 - a0) * j / pieces)
-        return refined
-
-    @staticmethod
-    def _handles(x0, y0, x1, y1, a0, a1, ds, zero_start=False, zero_end=False):
-        if zero_start and zero_end:
-            return (x1, y0), (x1, y0)
-
-        eps = 1e-12
-        if zero_start and math.sin(a1) > eps:
-            beta = y1 / math.sin(a1)
-            c2 = (x1 - math.cos(a1) * beta, y0)
-            if c2[0] >= x0 - eps:
-                alpha = min(ds / 3.0, max(0.0, c2[0] - x0))
-                return (x0 + alpha, y0), c2
-
-        if zero_end and math.cos(a0) > eps:
-            alpha = (x1 - x0) / math.cos(a0)
-            c1 = (x1, y0 + math.sin(a0) * alpha)
-            if c1[1] <= y1 + eps:
-                beta = min(ds / 3.0, max(0.0, y1 - c1[1]))
-                return c1, (x1, y1 - beta)
-
-        return ProfileCorner._bounded_handles(x0, y0, x1, y1, a0, a1, ds)
+        return refine_segments(
+            base,
+            lambda a0, a1: self._interp(self.s_table, a1) - self._interp(self.s_table, a0),
+            self.max_node_distance,
+        )
 
     def commands(self):
-        cmds = []
         thetas = self._segment_thetas()
-        last = len(thetas) - 2
-        for i, (a0, a1) in enumerate(zip(thetas, thetas[1:])):
+
+        def segment_data(a0, a1):
+            s0 = self._interp(self.s_table, a0)
+            s1 = self._interp(self.s_table, a1)
             x0 = self._interp(self.x_table, a0)
             y0 = self._interp(self.y_table, a0)
             x1 = self._interp(self.x_table, a1)
             y1 = self._interp(self.y_table, a1)
-            s0 = self._interp(self.s_table, a0)
-            s1 = self._interp(self.s_table, a1)
-            c1, c2 = self._handles(
-                x0,
-                y0,
-                x1,
-                y1,
-                a0,
-                a1,
-                s1 - s0,
-                zero_start=(i == 0),
-                zero_end=(i == last),
-            )
-            cmds.append((c1, c2, (x1, y1)))
-        c1, c2, _ = cmds[-1]
-        cmds[-1] = (c1, c2, (self.extent, self.extent))
-        return cmds
+            return x0, y0, x1, y1, a0, a1, s1 - s0
+
+        return corner_commands(thetas, segment_data, self.extent)
 
 
 def exact_g2_corner(extent):
@@ -384,10 +394,13 @@ class FancyBoxes(inkex.EffectExtension):
             if profile != "elastica":
                 if profile == "smooth_step":
                     profile_power = self.options.smooth_power
+                elif profile == "clothoid":
+                    profile_power = None
                 else:
                     profile = "sin_p"
                     profile_power = self.options.sin_power
-                profile_power = clamp(float(profile_power), 1.0, 12.0)
+                if profile_power is not None:
+                    profile_power = clamp(float(profile_power), 1.0, 12.0)
 
         cx, cy = self.svg.namedview.center
         x0, y0 = cx - w / 2.0, cy - h / 2.0
@@ -410,7 +423,7 @@ class FancyBoxes(inkex.EffectExtension):
                 else:
                     corner_cmds = ProfileCorner(
                         e,
-                        power=profile_power,
+                        power=profile_power if profile_power is not None else 1.0,
                         segments=segments,
                         profile=profile,
                         max_node_distance=max_node_distance,
